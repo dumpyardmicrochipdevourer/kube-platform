@@ -1,0 +1,122 @@
+---
+- name: Require a single control plane
+  ansible.builtin.assert:
+    that:
+      - groups['control_plane'] | length == 1
+      - snapshot is defined
+    quiet: true
+
+- name: Check the snapshot exists on the operator machine
+  ansible.builtin.stat:
+    path: "{{ snapshot }}"
+  delegate_to: localhost
+  become: false
+  register: etcd_backup_local
+
+- name: Fail without a snapshot file
+  ansible.builtin.assert:
+    that: etcd_backup_local.stat.exists
+    quiet: true
+
+- name: Find the etcd static pod manifest
+  ansible.builtin.stat:
+    path: /etc/kubernetes/manifests/etcd.yaml
+  register: etcd_backup_manifest
+
+- name: Read the etcd image from the static pod manifest
+  ansible.builtin.command: >-
+    awk '/image:/ {print $2; exit}'
+    {{ '/etc/kubernetes/manifests/etcd.yaml' if etcd_backup_manifest.stat.exists
+       else '/etc/kubernetes/manifests.stopped/etcd.yaml' }}
+  register: etcd_backup_image
+  changed_when: false
+
+- name: Stamp this restore
+  ansible.builtin.set_fact:
+    etcd_backup_stamp: "{{ ansible_facts.date_time.iso8601_basic_short }}"
+
+- name: Create the restore directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /var/lib/etcd-restore
+    - /etc/kubernetes/manifests.stopped
+
+- name: Upload the snapshot
+  ansible.builtin.copy:
+    src: "{{ snapshot }}"
+    dest: /var/lib/etcd-restore/snapshot.db
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Stop the API server and etcd
+  ansible.builtin.command:
+    cmd: "mv /etc/kubernetes/manifests/{{ item }}.yaml /etc/kubernetes/manifests.stopped/{{ item }}.yaml"
+    removes: "/etc/kubernetes/manifests/{{ item }}.yaml"
+  loop: [kube-apiserver, etcd]
+
+- name: Wait until their tasks are gone
+  ansible.builtin.shell:
+    cmd: set -o pipefail; ctr -n k8s.io tasks list | awk '{print $1}' | grep -E '^(etcd|kube-apiserver)-' || true
+    executable: /bin/bash
+  register: etcd_backup_running
+  until: etcd_backup_running.stdout == ''
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Remove a previous restore result
+  ansible.builtin.file:
+    path: /var/lib/etcd-restore/data
+    state: absent
+
+- name: Restore the snapshot with etcdutl from the etcd image
+  ansible.builtin.command:
+    argv:
+      - ctr
+      - -n
+      - k8s.io
+      - run
+      - --rm
+      - --mount
+      - type=bind,src=/var/lib/etcd-restore,dst=/restore,options=rbind:rw
+      - "{{ etcd_backup_image.stdout }}"
+      - etcd-restore-{{ etcd_backup_stamp }}
+      - etcdutl
+      - snapshot
+      - restore
+      - /restore/snapshot.db
+      - --data-dir=/restore/data
+      - --name={{ ansible_facts.hostname | lower }}
+      - --initial-cluster={{ ansible_facts.hostname | lower }}=https://{{ kube_node_ip }}:2380
+      - --initial-advertise-peer-urls=https://{{ kube_node_ip }}:2380
+  changed_when: true
+
+- name: Keep the old data directory
+  ansible.builtin.command:
+    cmd: "mv /var/lib/etcd /var/lib/etcd.before-restore-{{ etcd_backup_stamp }}"
+    removes: /var/lib/etcd
+
+- name: Put the restored data in place
+  ansible.builtin.command:
+    cmd: mv /var/lib/etcd-restore/data /var/lib/etcd
+    creates: /var/lib/etcd
+
+- name: Start etcd and the API server
+  ansible.builtin.command:
+    cmd: "mv /etc/kubernetes/manifests.stopped/{{ item }}.yaml /etc/kubernetes/manifests/{{ item }}.yaml"
+    removes: "/etc/kubernetes/manifests.stopped/{{ item }}.yaml"
+  loop: [etcd, kube-apiserver]
+
+- name: Wait for the API server
+  ansible.builtin.command: kubectl --kubeconfig {{ kube_admin_conf }} get --raw /readyz
+  register: etcd_backup_ready
+  until: etcd_backup_ready.stdout == 'ok'
+  retries: 60
+  delay: 5
+  changed_when: false

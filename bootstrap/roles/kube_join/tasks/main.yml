@@ -1,0 +1,35 @@
+---
+- name: Check whether the node already joined
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kube_join_kubelet
+
+- name: Join the node
+  when: not kube_join_kubelet.stat.exists
+  block:
+    - name: Create a join command on the first control plane
+      ansible.builtin.command: kubeadm token create --print-join-command
+      environment:
+        KUBECONFIG: "{{ kube_admin_conf }}"
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      register: kube_join_command
+      changed_when: true
+
+    - name: Upload control plane certificates
+      ansible.builtin.command: kubeadm init phase upload-certs --upload-certs --config /etc/kubernetes/kubeadm-config.yaml
+      environment:
+        KUBECONFIG: "{{ kube_admin_conf }}"
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      register: kube_join_certs
+      changed_when: true
+      when: inventory_hostname in groups['control_plane']
+
+    - name: Run the join command
+      ansible.builtin.command:
+        cmd: >-
+          {{ kube_join_command.stdout }}
+          {% if inventory_hostname in groups['control_plane'] %}
+          --control-plane --certificate-key {{ kube_join_certs.stdout_lines[-1] }}
+          --apiserver-advertise-address {{ kube_node_ip }}
+          {% endif %}
+        creates: /etc/kubernetes/kubelet.conf

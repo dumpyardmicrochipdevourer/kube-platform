@@ -1,0 +1,27 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ kube_node_ip }}
+  bindPort: 6443
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+skipPhases:
+  - addon/kube-proxy
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+clusterName: {{ kube_cluster_name }}
+kubernetesVersion: v{{ kube_version }}
+controlPlaneEndpoint: {{ kube_api_endpoint }}
+networking:
+  podSubnet: {{ kube_pod_cidr }}
+  serviceSubnet: {{ kube_service_cidr }}
+apiServer:
+  certSANs:
+{% for san in kube_cert_sans %}
+    - {{ san }}
+{% endfor %}
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd

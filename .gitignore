@@ -1,0 +1,8 @@
+.kube/
+*.retry
+.ansible/
+.vault-pass
+*.tfstate
+*.tfstate.*
+.terraform/
+backups/

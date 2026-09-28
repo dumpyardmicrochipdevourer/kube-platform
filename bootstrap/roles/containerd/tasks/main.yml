@@ -1,0 +1,87 @@
+---
+- name: Add the Docker repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    uris: "https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}"
+    suites: "{{ ansible_facts.distribution_release }}"
+    components: [stable]
+    signed_by: "https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}/gpg"
+  register: containerd_repo
+
+- name: Install containerd
+  ansible.builtin.apt:
+    name: containerd.io
+    state: present
+    update_cache: true
+
+- name: Generate the default config once
+  ansible.builtin.shell:
+    cmd: containerd config default > /etc/containerd/config.toml
+    creates: /etc/containerd/.config-generated
+
+- name: Mark the config as generated
+  ansible.builtin.file:
+    path: /etc/containerd/.config-generated
+    state: touch
+    mode: "0644"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Use the systemd cgroup driver
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: Restart containerd
+
+- name: Read registry hosts from certs.d
+  ansible.builtin.replace:
+    path: /etc/containerd/config.toml
+    regexp: "config_path = ''"
+    replace: "config_path = '/etc/containerd/certs.d'"
+  notify: Restart containerd
+
+- name: Create mirror directories
+  ansible.builtin.file:
+    path: "/etc/containerd/certs.d/{{ item.key }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ containerd_registry_mirrors | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Deploy mirror hosts files
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: "/etc/containerd/certs.d/{{ item.key }}/hosts.toml"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ containerd_registry_mirrors | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Enable and start containerd
+  ansible.builtin.systemd_service:
+    name: containerd
+    state: started
+    enabled: true
+
+- name: Apply the containerd config before the next role
+  ansible.builtin.meta: flush_handlers
+
+- name: Check that the CRI plugin is active
+  ansible.builtin.shell:
+    cmd: set -o pipefail; ctr plugins ls | awk '$1=="io.containerd.cri.v1" && $2=="runtime" && $NF=="ok"' | wc -l
+    executable: /bin/bash
+  register: containerd_cri
+  changed_when: false
+
+- name: Restart containerd when the CRI plugin is off
+  ansible.builtin.systemd_service:
+    name: containerd
+    state: restarted
+    daemon_reload: true
+  when: containerd_cri.stdout | trim != '1'

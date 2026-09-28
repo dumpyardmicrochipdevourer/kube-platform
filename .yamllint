@@ -1,0 +1,15 @@
+---
+extends: default
+ignore: |
+  gitops/**/crds/
+rules:
+  line-length:
+    max: 160
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start: enable
+  braces:
+    max-spaces-inside: 1

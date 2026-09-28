@@ -1,0 +1,20 @@
+---
+- name: Reset every node
+  hosts: k8s_cluster
+  become: true
+  tasks:
+    - name: Run kubeadm reset
+      ansible.builtin.command:
+        cmd: kubeadm reset --force
+        removes: /etc/kubernetes/kubelet.conf
+      register: reset_result
+      changed_when: reset_result.rc == 0
+
+    - name: Remove CNI and etcd state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/cni/net.d
+        - /var/lib/etcd
+        - /etc/kubernetes/manifests.stopped

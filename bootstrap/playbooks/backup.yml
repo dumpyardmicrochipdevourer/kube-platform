@@ -1,0 +1,6 @@
+---
+- name: Back up etcd
+  hosts: control_plane[0]
+  become: true
+  roles:
+    - etcd_backup

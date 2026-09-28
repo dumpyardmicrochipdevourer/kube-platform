@@ -1,0 +1,89 @@
+---
+- name: Read the kubelet version of this node
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kube_admin_conf }} get node {{ ansible_facts.hostname | lower }}
+    -o jsonpath={.status.nodeInfo.kubeletVersion}
+  delegate_to: "{{ groups['control_plane'][0] }}"
+  register: kube_upgrade_current
+  changed_when: false
+
+- name: Upgrade this node
+  when: kube_upgrade_current.stdout != 'v' ~ kube_version
+  block:
+    - name: Add the repository of the target minor
+      ansible.builtin.deb822_repository:
+        name: kubernetes
+        uris: "https://pkgs.k8s.io/core:/stable:/{{ kube_minor }}/deb/"
+        suites: /
+        signed_by: "https://pkgs.k8s.io/core:/stable:/{{ kube_minor }}/deb/Release.key"
+
+    - name: Release the kubeadm hold
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: install
+
+    - name: Install the target kubeadm
+      ansible.builtin.apt:
+        name: "kubeadm={{ kube_version }}-*"
+        state: present
+        update_cache: true
+        allow_change_held_packages: true
+
+    - name: Hold kubeadm
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: hold
+
+    - name: Upgrade the first control plane
+      ansible.builtin.command: kubeadm upgrade apply v{{ kube_version }} --yes
+      when: inventory_hostname == groups['control_plane'][0]
+      changed_when: true
+
+    - name: Upgrade the node configuration
+      ansible.builtin.command: kubeadm upgrade node
+      when: inventory_hostname != groups['control_plane'][0]
+      changed_when: true
+
+    - name: Drain the node
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kube_admin_conf }} drain {{ ansible_facts.hostname | lower }}
+        --ignore-daemonsets --delete-emptydir-data --timeout=300s
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      changed_when: true
+
+    - name: Release the kubelet and kubectl holds
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop: [kubelet, kubectl]
+
+    - name: Install the target kubelet and kubectl
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ kube_version }}-*"
+          - "kubectl={{ kube_version }}-*"
+        state: present
+        allow_change_held_packages: true
+
+    - name: Hold kubelet and kubectl
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubelet, kubectl]
+
+    - name: Restart kubelet
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for the node to be Ready
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kube_admin_conf }} wait --for=condition=Ready node/{{ ansible_facts.hostname | lower }} --timeout=300s
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      changed_when: false
+
+    - name: Uncordon the node
+      ansible.builtin.command: kubectl --kubeconfig {{ kube_admin_conf }} uncordon {{ ansible_facts.hostname | lower }}
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      changed_when: true

@@ -1,0 +1,22 @@
+---
+- name: Detect the release architecture
+  ansible.builtin.set_fact:
+    helm_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts.architecture] }}"
+
+- name: Download the helm archive
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-{{ helm_arch }}.tar.gz"
+    dest: "/tmp/helm-{{ helm_version }}.tar.gz"
+    checksum: "sha256:{{ helm_checksums[helm_arch] }}"
+    mode: "0644"
+
+- name: Install helm
+  ansible.builtin.unarchive:
+    src: "/tmp/helm-{{ helm_version }}.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include: ["linux-{{ helm_arch }}/helm"]
+    owner: root
+    group: root
+    mode: "0755"

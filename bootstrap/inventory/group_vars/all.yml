@@ -1,0 +1,19 @@
+---
+kube_cluster_name: lab
+kube_version: 1.37.1
+kube_minor: v1.37
+kube_pod_cidr: 10.244.0.0/16
+kube_service_cidr: 10.96.0.0/12
+kube_node_interface: eth0
+kube_node_ip: "{{ ansible_facts[kube_node_interface].ipv4.address }}"
+kube_api_address: "{{ hostvars[groups['control_plane'][0]].ansible_facts[kube_node_interface].ipv4.address }}"
+kube_api_endpoint: "{{ kube_api_address }}:6443"
+kube_cert_sans:
+  - 127.0.0.1
+kube_admin_conf: /etc/kubernetes/admin.conf
+containerd_registry_mirrors: {}
+helm_version: 4.3.0
+helm_checksums:
+  amd64: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+  arm64: 31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08
+cilium_version: 1.20.2

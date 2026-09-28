@@ -1,0 +1,4 @@
+---
+base: template://ubuntu-24.04
+networks:
+  - lima: user-v2

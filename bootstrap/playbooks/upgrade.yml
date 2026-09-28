@@ -1,0 +1,21 @@
+---
+- name: Upgrade the first control plane
+  hosts: control_plane[0]
+  become: true
+  serial: 1
+  roles:
+    - kube_upgrade
+
+- name: Upgrade the other control planes
+  hosts: control_plane[1:]
+  become: true
+  serial: 1
+  roles:
+    - kube_upgrade
+
+- name: Upgrade the workers
+  hosts: workers
+  become: true
+  serial: 1
+  roles:
+    - kube_upgrade
